@@ -258,7 +258,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Generate with DALL·E 3**")
     gen_text = st.text_area("Design prompt", placeholder="e.g. Minimalist oxidized silver hoops, prong-set CZ, geometric motif")
-    size_choice = st.selectbox("Generation size", ["512x512","768x768","1024x1024"], index=0)
+    size_choice = st.selectbox("Generation size", ["1024x1024"], index=0)
     if st.button("Generate Image", use_container_width=True):
         if not gen_text.strip():
             st.warning("Enter a prompt.")
