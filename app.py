@@ -139,7 +139,7 @@ def analyze_image_standardised(image: Image.Image):
         "You are a jewelry product expert. "
         "Return STRICT JSON with keys exactly: "
         '["Design Style","Form","Metal Color","Craft Style","Central Stone","Surrounding Layout","Stone Setting","Style Motif","summary"]. '
-        "Values must be short; use 'None' only when clearly no stone/setting. Summary & Prompt in 4-5 sentences."
+        "Values must be short; use 'None' only when clearly no stone/setting. Summary & Prompt in 4-5 sentences with every details."
     )
     user = "Analyze the jewelry image and fill the JSON. Avoid brand names; focus on visible attributes."
     resp = client.chat.completions.create(
