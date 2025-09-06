@@ -7,26 +7,22 @@ import streamlit as st
 import validators
 from dotenv import load_dotenv
 from openai import OpenAI
-
 # ============== APP SETUP ==============
 st.set_page_config(page_title="VoyllaGPT • Vision + Prompt (Chat Mode)", layout="wide")
 st.title("✨ VoyllaGPT — Vision + Prompt (Chat History)")
 st.caption("Analyze images → standardised traits · Generate manufacturable jewelry concepts (DALL·E 3)")
-
 load_dotenv()
 if not os.getenv("OPENAI_API_KEY"):
     st.error("❌ Please set your OPENAI_API_KEY in your .env file")
     st.stop()
 client = OpenAI()
-
 # ===== SIZE / QUALITY CONFIG =====
 MAX_INPUT_MB   = 5      # reject larger files from URL/upload
 PROCESS_MAX_PX = 768    # image sent to GPT-4o vision
 PREVIEW_MAX_PX = 400    # preview width/height in UI
-DOWNLOAD_MAX_PX= 1024   # cap “full” image for download
+DOWNLOAD_MAX_PX= 1024   # cap "full" image for download
 TIMEOUT_SEC    = 15
 JPEG_QUALITY   = 90
-
 # ------------- CONTROLLED VOCAB -------------
 ALLOWED = {
     "Design Style": ["Contemporary","Traditional/Ethnic","Vintage","Minimalist","Classic","Glamorous","Tribal","Geometric","Bohemian","Statement","Fusion","Art Deco"],
@@ -90,7 +86,6 @@ def map_craft_multi(text, max_items=2):
             hits.append(label)
         if len(hits)>=max_items: break
     return " | ".join(hits[:max_items]) if hits else None
-
 # ------------- IMAGE UTILS -------------
 def _bytes_to_mb(n:int)->float: return round(n/(1024*1024),2)
 def open_image_from_bytes(raw:bytes)->Image.Image:
@@ -107,10 +102,8 @@ def to_jpeg_bytes(img:Image.Image, quality:int=JPEG_QUALITY)->bytes:
         bg=Image.new("RGB", img.size, (255,255,255))
         bg.paste(img, mask=img.split()[-1]); img=bg
     img.save(buf, format="JPEG", quality=quality, optimize=True); return buf.getvalue()
-
 def image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(to_png_bytes(image)).decode("utf-8")
-
 def fetch_image_from_url_small(url:str)->Image.Image|None:
     try:
         r=requests.get(url, timeout=TIMEOUT_SEC, stream=True); r.raise_for_status()
@@ -126,22 +119,30 @@ def fetch_image_from_url_small(url:str)->Image.Image|None:
         return open_image_from_bytes(buf.getvalue())
     except Exception as e:
         st.error(f"Failed to fetch image: {e}"); return None
-
 def handle_uploaded_file_small(uploaded_file)->Image.Image|None:
     raw=uploaded_file.read(); size=_bytes_to_mb(len(raw))
     if size>MAX_INPUT_MB: st.error(f"Uploaded image too large ({size} MB > {MAX_INPUT_MB} MB)."); return None
     return open_image_from_bytes(raw)
-
 # ------------- VISION (standardised) -------------
 def analyze_image_standardised(image: Image.Image):
     base64_image = image_to_base64(image)
     system = (
         "You are a jewelry product expert. "
         "Return STRICT JSON with keys exactly: "
-        '["Design Style","Form","Metal Color","Craft Style","Central Stone","Surrounding Layout","Stone Setting","Style Motif","summary"]. '
-        "Values must be short; use 'None' only when clearly no stone/setting. Summary & Prompt in 4-5 sentences with every details."
+        '["Design Style","Form","Metal Color","Craft Style","Central Stone","Surrounding Layout","Stone Setting","Style Motif","detailed_summary","similar_prompt"]. '
+        "For detailed_summary: Write 8-10 sentences describing all visible details including proportions, textures, finishing, patterns, and manufacturing aspects. "
+        "For similar_prompt: Create a concise DALL-E prompt (2-3 sentences) that captures the key visual elements to recreate a similar piece. "
+        "Values must be descriptive; use 'None' only when clearly no stone/setting."
     )
-    user = "Analyze the jewelry image and fill the JSON. Avoid brand names; focus on visible attributes."
+    user = (
+        "Analyze the jewelry image and fill the JSON. Focus on:\n"
+        "1. All visible design elements and proportions\n"
+        "2. Surface treatments, textures, and finishes\n"
+        "3. Construction details and joinery\n"
+        "4. Color variations and material interactions\n"
+        "5. Size relationships between components\n"
+        "Create a detailed summary that captures manufacturing nuances and a similar_prompt for recreation."
+    )
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -151,30 +152,29 @@ def analyze_image_standardised(image: Image.Image):
                 {"type":"image_url","image_url":{"url":f"data:image/png;base64,{base64_image}"}}
             ]}
         ],
-        max_tokens=400
+        max_tokens=800  # Increased for detailed summary
     )
     raw = resp.choices[0].message.content.strip()
     try:
         raw_json = re.sub(r"^```(json)?|```$","",raw.strip(), flags=re.MULTILINE).strip()
         data = json.loads(raw_json)
     except Exception:
-        data = {k:None for k in ["Design Style","Form","Metal Color","Craft Style","Central Stone","Surrounding Layout","Stone Setting","Style Motif","summary"]}
+        data = {k:None for k in ["Design Style","Form","Metal Color","Craft Style","Central Stone","Surrounding Layout","Stone Setting","Style Motif","detailed_summary","similar_prompt"]}
         for k in data.keys():
             m=re.search(rf"{re.escape(k)}\s*[:\-]\s*(.+)", raw, flags=re.I)
             if m: data[k]=m.group(1).strip()
-
     std={}
     std["Design Style"]=map_to_allowed("Design Style", data.get("Design Style") or "") or "Contemporary"
     std["Form"]=map_to_allowed("Form", data.get("Form") or "") or "Geometric"
     std["Metal Color"]=map_to_allowed("Metal Color", data.get("Metal Color") or "") or "Silver"
-    std["Craft Style"]=map_craft_multi(data.get("Craft Style") or data.get("summary") or "")  # may be None
+    std["Craft Style"]=map_craft_multi(data.get("Craft Style") or data.get("detailed_summary") or "")  # may be None
     std["Central Stone"]=map_to_allowed("Central Stone", data.get("Central Stone") or "") or "None"
     std["Surrounding Layout"]=map_to_allowed("Surrounding Layout", data.get("Surrounding Layout") or "") or "Plain"
     std["Stone Setting"]=map_to_allowed("Stone Setting", data.get("Stone Setting") or ("None" if std["Central Stone"] in ["None",None] else "")) or "None"
     std["Style Motif"]=map_to_allowed("Style Motif", data.get("Style Motif") or "") or "Modern"
-    std["summary"]=data.get("summary") or "Design attributes extracted and standardised."
+    std["detailed_summary"]=data.get("detailed_summary") or "Detailed design attributes extracted and standardised for manufacturing reference."
+    std["similar_prompt"]=data.get("similar_prompt") or f"{std['Design Style']} {std['Form'].lower()} in {std['Metal Color'].lower()}, {std['Style Motif'].lower()} motif with {std['Central Stone'].lower()} stone"
     return std
-
 # ------------- GENERATION (DALL·E 3) -------------
 GEN_SYS_SAFETY = (
     "You are generating jewelry images for MANUFACTURING REFERENCE, not concept art. "
@@ -200,7 +200,6 @@ def build_generation_prompt(user_text:str)->str:
         "- Quality: photo-style product render (not illustration)."
     )
     return f"{GEN_SYS_SAFETY}\n\nUSER BRIEF:\n{user_text}\n\n{guidelines}"
-
 def dalle_generate_image(user_text:str, gen_size="512x512", preview_max_px=PREVIEW_MAX_PX, download_max_px=DOWNLOAD_MAX_PX):
     prompt = build_generation_prompt(user_text.strip())
     try:
@@ -221,15 +220,12 @@ def dalle_generate_image(user_text:str, gen_size="512x512", preview_max_px=PREVI
         return img_preview, img_download, None
     except Exception as e:
         return None, None, str(e)
-
 # ------------- STATE (history persists) -------------
 if "history" not in st.session_state:
     st.session_state.history = []  # items: {"type": "analysis"/"generation", ...}
-
 # ------------- SIDEBAR ACTIONS -------------
 with st.sidebar:
     st.header("🛠 Actions")
-
     st.markdown("**Analyze an Image**")
     up = st.file_uploader("Upload image", type=["jpg","jpeg","png"], key="upl")
     url = st.text_input("...or paste image URL")
@@ -254,7 +250,6 @@ with st.sidebar:
                 "image_bytes_full": to_png_bytes(img_download),
                 "attributes": attrs
             })
-
     st.markdown("---")
     st.markdown("**Generate with DALL·E 3**")
     gen_text = st.text_area("Design prompt", placeholder="e.g. Minimalist oxidized silver hoops, prong-set CZ, geometric motif")
@@ -274,7 +269,6 @@ with st.sidebar:
                     "image_bytes_preview": to_jpeg_bytes(pvw),
                     "image_bytes_full": to_png_bytes(dwn)
                 })
-
 # ------------- HISTORY RENDER -------------
 st.subheader("💬 History")
 if not st.session_state.history:
@@ -297,7 +291,19 @@ else:
                     ("Style Motif", a["Style Motif"]),
                 ]
                 st.table(rows)
-                st.markdown(f"**Summary:** {a['summary']}")
+                
+                # Enhanced display for detailed summary and similar prompt
+                st.markdown("**📋 Detailed Analysis**")
+                st.markdown(f"{a['detailed_summary']}")
+                
+                st.markdown("**🎯 Similar Product Prompt**")
+                st.code(a['similar_prompt'], language="text")
+                
+                # Add copy button for the similar prompt
+                if st.button(f"📋 Copy Similar Prompt", key=f"copy_prompt_{i}"):
+                    st.write("✅ Prompt copied! You can now paste it in the generation text area above.")
+                    st.session_state[f"copied_prompt_{i}"] = a['similar_prompt']
+                
                 st.download_button(
                     "📥 Download analyzed PNG",
                     data=item["image_bytes_full"],
@@ -317,5 +323,4 @@ else:
                     mime="image/png",
                     key=f"dl_gen_{i}"
                 )
-
 st.caption("State is persisted in session — downloading images will not clear results.")
